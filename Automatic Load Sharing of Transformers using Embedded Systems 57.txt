@@ -1,0 +1,97 @@
+import time
+import RPi.GPIO as GPIO
+import spidev  # For MCP3008 ADC
+
+# Pin Definitions
+RELAY_1 = 17  # GPIO pin for Relay 1
+RELAY_2 = 27  # GPIO pin for Relay 2
+
+# ADC Configuration (MCP3008)
+spi = spidev.SpiDev()
+spi.open(0, 0)  # SPI bus 0, device 0
+spi.max_speed_hz = 1350000  # SPI speed
+
+# Calibration Values
+SENSITIVITY = 0.066  # Sensitivity of ACS712 (66 mV/A for 30A module)
+ZERO_CURRENT_VOLTAGE = 2.5  # Voltage at 0A for ACS712
+
+# Load Thresholds
+MAX_LOAD_PER_TRANSFORMER = 20.0  # Maximum load per transformer (in Amps)
+LOAD_DIFFERENCE_THRESHOLD = 5.0  # Allowed load difference between transformers
+
+# Initialize GPIO
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(RELAY_1, GPIO.OUT)
+GPIO.setup(RELAY_2, GPIO.OUT)
+
+# Ensure Relays are OFF initially
+GPIO.output(RELAY_1, GPIO.HIGH)  # HIGH = OFF (for active-low relays)
+GPIO.output(RELAY_2, GPIO.HIGH)
+
+def read_adc(channel):
+    """
+    Read analog value from MCP3008 ADC.
+    """
+    adc = spi.xfer2([1, (8 + channel) << 4, 0])
+    data = ((adc[1] & 3) << 8 | adc[2]
+    return data
+
+def read_current(channel):
+    """
+    Read current from ACS712 sensor.
+    """
+    adc_value = read_adc(channel)
+    voltage = (adc_value / 1023.0) * 5.0  # Convert to voltage (0-5V)
+    current = (voltage - ZERO_CURRENT_VOLTAGE) / SENSITIVITY  # Calculate current
+    return abs(current)  # Return absolute value
+
+def balance_load(current1, current2):
+    """
+    Balance load between transformers.
+    """
+    if current1 > MAX_LOAD_PER_TRANSFORMER:
+        # Shift load to Transformer 2
+        GPIO.output(RELAY_1, GPIO.HIGH)  # Turn OFF Relay 1
+        GPIO.output(RELAY_2, GPIO.LOW)   # Turn ON Relay 2
+        print("Load shifted to Transformer 2")
+    elif current2 > MAX_LOAD_PER_TRANSFORMER:
+        # Shift load to Transformer 1
+        GPIO.output(RELAY_2, GPIO.HIGH)  # Turn OFF Relay 2
+        GPIO.output(RELAY_1, GPIO.LOW)   # Turn ON Relay 1
+        print("Load shifted to Transformer 1")
+    elif abs(current1 - current2) > LOAD_DIFFERENCE_THRESHOLD:
+        if current1 > current2:
+            # Shift load to Transformer 2
+            GPIO.output(RELAY_1, GPIO.HIGH)  # Turn OFF Relay 1
+            GPIO.output(RELAY_2, GPIO.LOW)   # Turn ON Relay 2
+            print("Load balanced to Transformer 2")
+        else:
+            # Shift load to Transformer 1
+            GPIO.output(RELAY_2, GPIO.HIGH)  # Turn OFF Relay 2
+            GPIO.output(RELAY_1, GPIO.LOW)   # Turn ON Relay 1
+            print("Load balanced to Transformer 1")
+
+def main():
+    try:
+        while True:
+            # Read Current from Transformers
+            current1 = read_current(0)  # Channel 0 for Transformer 1
+            current2 = read_current(1)  # Channel 1 for Transformer 2
+
+            # Display Currents
+            print(f"Transformer 1: {current1:.2f} A, Transformer 2: {current2:.2f} A")
+
+            # Balance Load
+            balance_load(current1, current2)
+
+            # Delay for stability
+            time.sleep(1)
+
+    except KeyboardInterrupt:
+        print("Exiting program...")
+    finally:
+        # Cleanup GPIO
+        GPIO.cleanup()
+
+if __name__ == "__main__":
+    main()
